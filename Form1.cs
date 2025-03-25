@@ -11,6 +11,7 @@ namespace atm_v2
         private TcpClient client; // Cliente TCP para mantener la conexión
         private NetworkStream stream; // Flujo para enviar/recibir datos
         private Thread receiveThread; // Hilo para recibir mensajes del servidor
+        private bool autoAprobado = false;
 
         public Form1()
         {
@@ -19,7 +20,7 @@ namespace atm_v2
 
         private void button1_Click(object sender, EventArgs e)
         {
-            string serverIP = "192.168.101.2"; // Cambiar según sea necesario
+            string serverIP = "192.168.1.107"; // Cambiar según sea necesario
             int port = 1234; // Cambiar según sea necesario
 
             try
@@ -63,48 +64,76 @@ namespace atm_v2
                 {
                     byte[] lengthBuffer = new byte[2];
 
-                    // Leer los primeros 2 bytes para obtener la longitud del mensaje
-                    int bytesRead = await stream.ReadAsync(lengthBuffer, 0, 2);
+                    // Leer los primeros 2 bytes (longitud del mensaje)
+                    int bytesRead = await LeerTotalAsync(stream, lengthBuffer, 2);
                     if (bytesRead < 2)
                     {
-                        Invoke((MethodInvoker)delegate
+                        if (!this.IsDisposed)
                         {
-                            AddLog("Error: No se recibieron los bytes de longitud completos.");
-                        });
+                            Invoke((MethodInvoker)delegate
+                            {
+                                AddLog("Error: No se recibieron los bytes de longitud completos. Bytes leídos: " + bytesRead);
+                            });
+                        }
                         break;
                     }
 
-                    // Asegurar que los bytes de longitud estén en formato Little-Endian
-                    if (BitConverter.IsLittleEndian)
+                    // Mostrar los bytes de longitud recibidos
+                    byte[] receivedBytes = lengthBuffer.ToArray();
+                    Array.Reverse(receivedBytes); // Convertir de Little-Endian a Big-Endian
+                    short messageLength = BitConverter.ToInt16(receivedBytes, 0);
+
+                    // Log de los bytes recibidos (longitud)
+                    if (!this.IsDisposed)
                     {
-                        Array.Reverse(lengthBuffer);
+                        Invoke((MethodInvoker)delegate
+                        {
+                            AddLog($"Bytes recibidos (longitud): [{string.Join(", ", receivedBytes)}]");
+                            AddLog($"Longitud del mensaje esperada: {messageLength}");
+                        });
                     }
 
-                    // Convertir los primeros 2 bytes a un número entero (longitud esperada)
-                    short messageLength = BitConverter.ToInt16(lengthBuffer, 0);
-
-                    // Crear un buffer del tamaño adecuado para el mensaje
-                    byte[] buffer = new byte[messageLength];
-
                     // Leer el mensaje completo basado en la longitud recibida
+                    byte[] buffer = new byte[messageLength];
                     bytesRead = await LeerTotalAsync(stream, buffer, messageLength);
                     if (bytesRead < messageLength)
                     {
-                        Invoke((MethodInvoker)delegate
+                        if (!this.IsDisposed)
                         {
-                            AddLog("Error: No se recibió el mensaje completo.");
-                        });
+                            Invoke((MethodInvoker)delegate
+                            {
+                                AddLog($"Error: No se recibió el mensaje completo. Bytes esperados: {messageLength}, Bytes recibidos: {bytesRead}");
+                            });
+                        }
                         break;
                     }
 
-                    // Convertir el mensaje de bytes a string UTF-8
+                    // Log de los bytes recibidos (mensaje)
+                    if (!this.IsDisposed)
+                    {
+                        Invoke((MethodInvoker)delegate
+                        {
+                            AddLog($"Bytes recibidos (mensaje): [{string.Join(", ", buffer)}]");
+                        });
+                    }
+
+                    // Convertir mensaje recibido en string
                     string receivedMessage = Encoding.UTF8.GetString(buffer, 0, bytesRead);
 
-                    // Mostrar el mensaje recibido en el log
-                    Invoke((MethodInvoker)delegate
+                    // Mostrar mensaje en el log
+                    if (!this.IsDisposed)
                     {
-                        AddLog($"Mensaje recibido: {receivedMessage}");
-                    });
+                        Invoke((MethodInvoker)delegate
+                        {
+                            AddLog($"Mensaje recibido: {receivedMessage}");
+
+                            // Si el CheckBox está activado, responder automáticamente con Aprobado
+                            if (autoAprobado)
+                            {
+                                EnviarMensajeAprobado();
+                            }
+                        });
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -112,10 +141,9 @@ namespace atm_v2
                     {
                         Invoke((MethodInvoker)delegate
                         {
-                            AddLog("Error: No se recibieron los bytes de longitud completos.");
+                            AddLog("Error en la recepción del mensaje: " + ex.Message);
                         });
                     }
-
                     break;
                 }
             }
@@ -154,10 +182,10 @@ namespace atm_v2
             char ascii28 = (char)28;
             string message = $"{ascii28}22{ascii28}099{ascii28}X{ascii28}A";
 
-            EnviarMensaje(message);;
+            EnviarMensaje(message);
         }
 
-        private void EnviarMensaje(string messageToSend)
+        private async void EnviarMensaje(string mensaje)
         {
             if (client == null || !client.Connected)
             {
@@ -167,21 +195,29 @@ namespace atm_v2
 
             try
             {
-                // Convertir el número de longitud a 2 bytes en formato Little-Endian
-                byte[] lengthBytes = BitConverter.GetBytes((short)messageToSend.Length);
+                // Convertir la longitud del mensaje a 2 bytes en formato Little-Endian
+                byte[] lengthBytes = BitConverter.GetBytes((short)mensaje.Length);
+                if (BitConverter.IsLittleEndian)
+                {
+                    Array.Reverse(lengthBytes); // Asegurar que se envíe en Little-Endian
+                }
 
                 // Convertir el mensaje a bytes UTF-8
-                byte[] messageBytes = Encoding.UTF8.GetBytes(messageToSend);
+                byte[] mensajeBytes = Encoding.UTF8.GetBytes(mensaje);
 
                 // Crear el paquete final (longitud + mensaje)
-                byte[] finalMessage = new byte[lengthBytes.Length + messageBytes.Length];
+                byte[] finalMessage = new byte[lengthBytes.Length + mensajeBytes.Length];
                 Array.Copy(lengthBytes, 0, finalMessage, 0, lengthBytes.Length);
-                Array.Copy(messageBytes, 0, finalMessage, lengthBytes.Length, messageBytes.Length);
+                Array.Copy(mensajeBytes, 0, finalMessage, lengthBytes.Length, mensajeBytes.Length);
 
-                // Enviar al sistema central
-                stream.Write(finalMessage, 0, finalMessage.Length);
+                // Log de los bytes enviados
+                AddLog($"Bytes enviados (longitud): [{string.Join(", ", lengthBytes)}]");
+                AddLog($"Bytes enviados (mensaje): [{string.Join(", ", mensajeBytes)}]");
 
-                AddLog("Mensaje enviado correctamente.");
+                // Enviar el mensaje completo al cajero
+                await stream.WriteAsync(finalMessage, 0, finalMessage.Length);
+
+                AddLog($"Mensaje enviado: {mensaje}");
                 textBoxMessage.Clear();
             }
             catch (Exception ex)
@@ -218,12 +254,6 @@ namespace atm_v2
             }
         }
 
-        // Conversión de un número a su array de bits
-        private byte[] ConvertNumberToBitArray(short number)
-        {
-            return BitConverter.GetBytes(number); // Convierte el número a un array de bytes
-        }
-
         private void AddLog(string message)
         {
             if (listBoxLogs.InvokeRequired)
@@ -253,6 +283,20 @@ namespace atm_v2
         private void labelStatus_Click(object sender, EventArgs e)
         {
 
+        }
+
+        private void checkBox1_CheckedChanged(object sender, EventArgs e)
+        {
+            autoAprobado = checkBox1.Checked;
+            AddLog($"Auto-respuesta de aprobación: {(autoAprobado ? "Activada" : "Desactivada")}");
+        }
+
+        private void EnviarMensajeAprobado()
+        {
+            char ascii28 = (char)28;
+            string message = $"{ascii28}22{ascii28}099{ascii28}X{ascii28}99";
+            EnviarMensaje(message);
+            AddLog("Respuesta automática: Aprobado enviado.");
         }
     }
 }
