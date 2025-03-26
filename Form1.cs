@@ -20,7 +20,7 @@ namespace atm_v2
 
         private void button1_Click(object sender, EventArgs e)
         {
-            string serverIP = "192.168.1.107"; // Cambiar según sea necesario
+            string serverIP = "192.168.101.2"; // Cambiar según sea necesario
             int port = 1234; // Cambiar según sea necesario
 
             try
